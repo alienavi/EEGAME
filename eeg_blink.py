@@ -5,9 +5,10 @@ import matplotlib.pyplot as plt
 from scipy.signal import butter, filtfilt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from PyQt5.QtWidgets import (
-    QApplication, QVBoxLayout, QHBoxLayout, QSlider, QWidget, QLabel, QLineEdit, QPushButton, QStackedWidget, QGridLayout
+    QApplication, QVBoxLayout, QHBoxLayout, QSlider, QWidget, QLabel, QLineEdit, QPushButton, QStackedWidget, QFileDialog, QDateEdit
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QDate
+from PyQt5.QtGui import QPixmap
 
 
 # Butterworth low-pass filter
@@ -18,18 +19,111 @@ def low_pass_filter(data, cutoff, fs, order=4):
     filtered_data = filtfilt(b, a, data)
     return filtered_data
 
+# Intro Screen
+class IntroScreen(QWidget):
+    def __init__(self, stacked_widget):
+        super().__init__()
+        self.stacked_widget = stacked_widget
+        self.file_path = None  # Placeholder for selected file
+        self.init_ui()
+        self.resize(300,400)
+
+    def init_ui(self):
+        layout = QVBoxLayout()
+
+        # Logo
+        logo = QLabel()
+        pixmap = QPixmap("./NervNet.png") 
+        pixmap = pixmap.scaled(200, 200, Qt.KeepAspectRatio)
+        logo.setPixmap(pixmap)
+        logo.setAlignment(Qt.AlignCenter)
+        layout.addWidget(logo)
+
+        # Name Input
+        name_layout = QHBoxLayout()
+        name_label = QLabel("Name:")
+        self.name_input = QLineEdit()
+        self.name_input.textChanged.connect(self.validate_inputs)
+        name_layout.addWidget(name_label)
+        name_layout.addWidget(self.name_input)
+        layout.addLayout(name_layout)
+
+        # Date Picker
+        date_layout = QHBoxLayout()
+        date_label = QLabel("Date:")
+        self.date_input = QDateEdit()
+        self.date_input.setCalendarPopup(True)  # Enable dropdown calendar
+        self.date_input.setDate(QDate.currentDate())  # Set default to today
+        self.date_input.dateChanged.connect(self.validate_inputs)
+        date_layout.addWidget(date_label)
+        date_layout.addWidget(self.date_input)
+        layout.addLayout(date_layout)
+
+        # File Input
+        file_layout = QHBoxLayout()
+        file_label = QLabel("CSV File:")
+        self.file_button = QPushButton("Browse")
+        self.file_button.clicked.connect(self.browse_file)
+        self.file_feedback = QLabel("No file selected")
+        file_layout.addWidget(file_label)
+        file_layout.addWidget(self.file_button)
+        layout.addLayout(file_layout)
+        layout.addWidget(self.file_feedback)
+
+        # Start Button
+        self.start_button = QPushButton("Start")
+        self.start_button.setEnabled(False)  # Initially disabled
+        self.start_button.clicked.connect(self.start_main_app)
+        layout.addWidget(self.start_button)
+
+        self.setLayout(layout)
+
+    def browse_file(self):
+        file_dialog = QFileDialog()
+        file_path, _ = file_dialog.getOpenFileName(self, "Select CSV File", "", "CSV Files (*.csv)")
+        if file_path:
+            self.file_path = file_path
+            self.file_feedback.setText(file_path)
+            self.validate_inputs()
+
+    def validate_inputs(self):
+        name_filled = bool(self.name_input.text().strip())
+        date_filled = bool(self.date_input.text().strip())
+        file_selected = bool(self.file_path)
+        self.start_button.setEnabled(name_filled and date_filled and file_selected)
+
+    def start_main_app(self):
+        # Pass user inputs to the next stage
+        main_app = self.stacked_widget.widget(1)
+        main_app.file_path = self.file_path
+
+        # Load the data into Stage1
+        eeg_data = pd.read_csv(self.file_path)
+        main_app.stage1.eeg_data = eeg_data
+        main_app.stage1.time = eeg_data["Time (s)"]
+        main_app.stage1.fs = 256  # Assumed sampling frequency
+        main_app.stage1.update_plot()
+        main_app.stage1.user_name = self.name_input.text().strip()
+        main_app.stage1.user_date = self.date_input.text().strip()
+
+        # Switch to the main app
+        self.stacked_widget.resize(1200, 900)
+        self.stacked_widget.setCurrentIndex(1)
 
 class Stage1(QWidget):
-    def __init__(self, eeg_data, time, fs, stacked_widget):
+    def __init__(self, eeg_data, time, fs, user_name, user_date, stacked_widget):
         super().__init__()
         self.eeg_data = eeg_data
         self.time = time
         self.fs = fs
         self.cutoff = 30  # Default cutoff frequency
         self.filtered_data = None
+        self.user_name = user_name
+        self.user_date = user_date
         self.stacked_widget = stacked_widget
 
         self.init_ui()
+        self.resize(1200,900)
 
     def init_ui(self):
         layout = QVBoxLayout()
@@ -85,7 +179,8 @@ class Stage1(QWidget):
         layout.addWidget(self.feedback_label)
 
         self.setLayout(layout)
-        self.update_plot()
+        if self.eeg_data is not None :
+            self.update_plot()
 
     def update_plot(self):
         self.cutoff = self.slider.value()
@@ -129,12 +224,16 @@ class Stage1(QWidget):
             self.feedback_label.setText("Filtered data saved to 'filtered_data.csv'.")
 
     def export_image(self):
-        self.figure.savefig("stage-1.png")
-        self.feedback_label.setText("Image saved to 'stage-1.png'.")
+        file_name = self.user_name+"_"+self.user_date+"_"+"stage-1.png"
+        file_name = file_name.replace("/","_")
+        self.figure.savefig(file_name)
+        self.feedback_label.setText(f'Image saved to "{file_name}".')
 
     def goto_stage2(self):
         stage2 = self.stacked_widget.widget(1)
         stage2.load_data(self.filtered_data)
+        stage2.user_name = self.user_name
+        stage2.user_date = self.user_date
         self.stacked_widget.setCurrentIndex(1)
 
 
@@ -143,12 +242,15 @@ class Stage2(QWidget):
         super().__init__()
         self.filtered_data = None
         self.stacked_widget = stacked_widget
+        self.user_name = None
+        self.user_date = None
 
         # Threshold defaults
         self.base_thresholds = {"FP1": 8500, "FP2": -8400}
         self.slider_values = {"FP1": 100, "FP2": 100}
 
         self.init_ui()
+        self.resize(1200,900)
 
     def init_ui(self):
         layout = QVBoxLayout()
@@ -167,6 +269,7 @@ class Stage2(QWidget):
 
         # Buttons
         button_layout = QHBoxLayout()
+        self.feedback_label = QLabel("")
         back_button = QPushButton("Back")
         back_button.clicked.connect(self.goto_stage1)
         image_button = QPushButton("Save Image")
@@ -174,6 +277,10 @@ class Stage2(QWidget):
         button_layout.addWidget(back_button)
         button_layout.addWidget(image_button)
         layout.addLayout(button_layout)
+
+        # Feedback Label for Export
+        self.feedback_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.feedback_label)
 
         self.setLayout(layout)
 
@@ -258,33 +365,39 @@ class Stage2(QWidget):
         self.stacked_widget.setCurrentIndex(0)
 
     def export_image(self):
-        self.figure.savefig("stage-2.png")
-        self.feedback_label.setText("Image saved to 'stage-2.png'.")
+        file_name = self.user_name+"_"+self.user_date+"_"+"stage-2.png"
+        file_name = file_name.replace("/","_")
+        self.figure.savefig(file_name)
+        self.feedback_label.setText(f'Image saved to "{file_name}".')
 
 class MainApp(QStackedWidget):
-    def __init__(self, eeg_data, time, fs):
+    def __init__(self, eeg_data=None, time=None, fs=None, user_name=None, user_date=None):
         super().__init__()
-        self.stage1 = Stage1(eeg_data, time, fs, self)
+        self.stage1 = Stage1(eeg_data, time, fs, user_name, user_date, self)
         self.stage2 = Stage2(self)
         self.addWidget(self.stage1)
         self.addWidget(self.stage2)
         self.setCurrentIndex(0)
 
 def main():
-    # Load EEG data
-    file_path = "eeg-data/Ecog_waveform_2.csv"  # Update with your file path
-    eeg_data = pd.read_csv(file_path)
-    time = eeg_data["Time (s)"]
-    fs = 256  # Sampling frequency (assumed)
-
     app = QApplication(sys.argv)
-    main_app = MainApp(eeg_data, time, fs)
-    
+
+    # Create the stacked widget
+    stacked_widget = QStackedWidget()
+
+    # Add Intro Screen
+    intro_screen = IntroScreen(stacked_widget)
+    stacked_widget.addWidget(intro_screen)
+
+    # Add Main Application
+    main_app = MainApp()
+    stacked_widget.addWidget(main_app)
+
     # Set window title and size
-    main_app.setWindowTitle("EEG Analysis Tool")
-    main_app.resize(1200, 900)  # Width: 1200px, Height: 900px
-    
-    main_app.show()
+    stacked_widget.setWindowTitle("EEG Analysis Tool")
+    stacked_widget.resize(300, 400)
+    stacked_widget.show()
+
     sys.exit(app.exec_())
 
 if __name__ == "__main__":
